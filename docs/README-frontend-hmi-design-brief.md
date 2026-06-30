@@ -40,7 +40,7 @@ Pantalla principal del operario. Debe contener sólo lo necesario para producir.
 
 ### B. Supervisión
 
-Indicadores históricos, configuración, comunicación y métricas para el responsable de operaciones.
+Indicadores históricos y métricas para el responsable de operaciones. Esta vista se dedica exclusivamente al análisis: no contiene formularios de comunicación ni de configuración.
 
 ### C. Consola
 
@@ -53,12 +53,17 @@ La navegación debe estar siempre visible y dejar claro cuál vista está activa
 Debe mostrarse en las tres vistas:
 
 - Nombre de la máquina o proceso.
-- Estado de conexión: conectado, desconectado o datos desactualizados.
+- Botón global de conexión: conectado, desconectado, conectando, error o datos desactualizados.
 - Modo físico: automático o manual.
 - Estado de máquina: lista, produciendo, pausada, detenida, transición de stack, manual o falla.
 - Alarma activa, si existe.
+- Engranaje global para abrir la configuración en un drawer lateral.
 
 Estados y conexión deben usar texto corto, forma/icono y color redundante.
+
+Al pulsar el botón de conexión se abre un popover disponible desde cualquier vista. Debe mostrar el error actual, detectar los puertos seriales reales del computador y permitir elegirlos de una lista. Cada opción indica nombre, descripción y tipo (`USB`, `Bluetooth`, `Virtual` u `Otro`). Bluetooth se muestra, pero nunca se recomienda automáticamente.
+
+El sistema preselecciona el último puerto que se conectó exitosamente; si no existe, puede sugerir el único adaptador USB detectado. El operario siempre debe confirmar con “Conectar”. También se ofrecen “Actualizar” y “Desconectar”, junto al resumen fijo `19200 8E1 · esclavo 1`. El puerto no se escribe manualmente.
 
 ## 5. Vista Operación
 
@@ -178,28 +183,27 @@ Tabla de stacks:
 
 Debe existir exportación CSV de eventos por caja.
 
-### 6.4 Comunicación
+Supervisión no debe incluir Comunicación ni Parámetros. Todo su ancho se reserva para los seis KPIs, las tres gráficas y el histórico.
 
-- Simulador sí/no.
-- Puerto serial.
-- Esclavo.
-- Baudrate.
+## 7. Drawer global de Configuración
+
+Se abre desde el engranaje de la cabecera y contiene:
+
+- Elección entre simulador local y PLC real.
+- Cambio automático/manual únicamente para el simulador.
 - Periodo de poll.
-- Aplicar, conectar y desconectar.
-
-Esta configuración no debe aparecer en Operación.
-
-### 6.5 Parámetros
-
 - Máximo de cajas permitido por la HMI.
 - Zona horaria.
-- Cambio de modo automático/manual únicamente para el simulador.
+- Parámetros Modbus fijos como referencia no editable: esclavo `1`, `19200 8E1`, timeout y reintentos.
+- Aviso de cambios sin guardar, acciones Cancelar y Guardar.
 
-## 7. Vista Consola
+Conectar/Desconectar no se mezcla con Guardar configuración. El drawer y el popover deben cerrarse con Escape, clic exterior y botón explícito, con foco visible para teclado.
+
+## 8. Vista Consola
 
 La consola es de sólo lectura y debe parecer una herramienta técnica, no una pantalla de mando.
 
-### 7.1 Entradas físicas
+### 8.1 Entradas físicas
 
 Mostrar como LEDs independientes:
 
@@ -224,7 +228,7 @@ Mostrar como LEDs independientes:
 
 Cada indicador incluye nombre, descripción, estado `ON/OFF` y dirección Modbus.
 
-### 7.2 Salidas físicas
+### 8.2 Salidas físicas
 
 Mostrar por separado:
 
@@ -243,7 +247,7 @@ Mostrar por separado:
 
 Una salida activa se ilumina, pero nunca debe parecer un botón. Añadir el texto “Sólo lectura”.
 
-### 7.3 Consola técnica
+### 8.3 Consola técnica
 
 - Lectura de `D200-D219`.
 - Request ID confirmado.
@@ -254,7 +258,7 @@ Una salida activa se ilumina, pero nunca debe parecer un botón. Añadir el text
 - Log de transacciones y errores Modbus.
 - Actualización manual y refresco automático de I/O.
 
-## 8. Casos de uso
+## 9. Casos de uso
 
 ### Operario inicia producción
 
@@ -301,8 +305,10 @@ Una salida activa se ilumina, pero nunca debe parecer un botón. Añadir el text
 - Todos los mandos quedan bloqueados.
 - No se presenta el último valor como si fuera actual.
 - El PLC gestiona localmente su respuesta segura.
+- El operario abre la conexión desde cualquier vista, actualiza la lista y selecciona un puerto detectado.
+- Si el puerto está ocupado, la interfaz sugiere cerrar XDPPro u otro programa que lo esté utilizando.
 
-## 9. Estados que deben diseñarse
+## 10. Estados que deben diseñarse
 
 La propuesta visual debe incluir, como mínimo:
 
@@ -319,7 +325,7 @@ La propuesta visual debe incluir, como mínimo:
 11. Consola con varios sensores y salidas activas.
 12. Sin histórico todavía.
 
-## 10. Requisitos visuales y de usabilidad
+## 11. Requisitos visuales y de usabilidad
 
 - Prioridad desktop industrial de `1280×800` y `1366×768`.
 - Adaptación a tablet.
@@ -333,7 +339,7 @@ La propuesta visual debe incluir, como mínimo:
 - No ocultar la alarma activa detrás de un modal.
 - No poner configuración técnica junto a los mandos normales.
 
-## 11. Entrega solicitada a la IA de diseño
+## 12. Entrega solicitada a la IA de diseño
 
 Generar entre dos y cuatro alternativas visuales:
 

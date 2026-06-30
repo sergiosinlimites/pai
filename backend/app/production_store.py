@@ -90,6 +90,7 @@ class ProductionStore:
         return {
             "max_stack_size": int(values.get("max_stack_size", "100")),
             "timezone": values.get("timezone", "America/Bogota"),
+            "last_serial_port": values.get("last_serial_port") or None,
         }
 
     def update_settings(
@@ -114,6 +115,13 @@ class ProductionStore:
                     (timezone_name,),
                 )
         return self.settings()
+
+    def remember_serial_port(self, port: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES('last_serial_port', ?)",
+                (port,),
+            )
 
     def logical_total(self) -> int:
         with self._lock:
@@ -339,6 +347,14 @@ class ProductionStore:
                 WHERE recovered=0 ORDER BY id DESC LIMIT 101
                 """
             ).fetchall()
+            trend_rows = self._connection.execute(
+                """
+                SELECT completed_at FROM box_events
+                WHERE recovered=0 AND completed_at>=?
+                ORDER BY completed_at
+                """,
+                (day_ago,),
+            ).fetchall()
             state_rows = self._connection.execute(
                 """
                 SELECT state_code, started_at, COALESCE(ended_at, ?) AS ended_at
@@ -360,6 +376,15 @@ class ProductionStore:
             (timestamps[index] - timestamps[index - 1]).total_seconds()
             for index in range(1, len(timestamps))
         ]
+        trend_timestamps = [
+            datetime.fromisoformat(row["completed_at"]) for row in trend_rows
+        ]
+        trend_buckets: dict[str, list[float]] = {}
+        for index in range(1, len(trend_timestamps)):
+            current = trend_timestamps[index]
+            seconds = (current - trend_timestamps[index - 1]).total_seconds()
+            hour = current.replace(minute=0, second=0, microsecond=0).isoformat()
+            trend_buckets.setdefault(hour, []).append(seconds)
         durations = {"running_seconds_24h": 0.0, "paused_seconds_24h": 0.0}
         for row in state_rows:
             start = max(datetime.fromisoformat(row["started_at"]), now - timedelta(hours=24))
@@ -377,6 +402,14 @@ class ProductionStore:
             "stacks_completed": stacks_completed,
             "average_cycle_seconds": round(sum(intervals) / len(intervals), 2) if intervals else None,
             "hourly_production": [dict(row) for row in hourly_rows],
+            "cycle_time_trend": [
+                {
+                    "hour": hour,
+                    "average_seconds": round(sum(values) / len(values), 2),
+                    "sample_count": len(values),
+                }
+                for hour, values in sorted(trend_buckets.items())
+            ],
             **{key: round(value, 1) for key, value in durations.items()},
         }
 

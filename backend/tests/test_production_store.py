@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.production_store import ProductionStore
@@ -71,6 +72,38 @@ class ProductionStoreTests(unittest.TestCase):
         )
         self.assertEqual(settings["max_stack_size"], 150)
         self.assertEqual(settings["timezone"], "America/Bogota")
+
+    def test_last_successful_serial_port_is_persisted(self) -> None:
+        self.store.remember_serial_port("COM9")
+        self.assertEqual(self.store.settings()["last_serial_port"], "COM9")
+
+    def test_summary_exposes_cycle_time_trend(self) -> None:
+        start = datetime.now(timezone.utc) - timedelta(minutes=3)
+        self.store.ingest_status(
+            plc_total=0,
+            stack_count=0,
+            active_target=20,
+            state_code=3,
+            state_label="running",
+            fault_code=0,
+            fault_label="none",
+            observed_at=start.isoformat(),
+        )
+        for total, seconds in ((1, 30), (2, 70), (3, 110)):
+            self.store.ingest_status(
+                plc_total=total,
+                stack_count=total,
+                active_target=20,
+                state_code=3,
+                state_label="running",
+                fault_code=0,
+                fault_label="none",
+                observed_at=(start + timedelta(seconds=seconds)).isoformat(),
+            )
+
+        trend = self.store.summary()["cycle_time_trend"]
+        self.assertTrue(trend)
+        self.assertGreater(trend[0]["average_seconds"], 0)
 
 
 if __name__ == "__main__":

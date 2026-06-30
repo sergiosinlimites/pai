@@ -133,7 +133,7 @@ class PlcService:
                     self._last_error = f"No fue posible abrir el puerto Modbus {self.config.port}"
                     await self._close_client()
             except Exception as exc:  # pragma: no cover - serial hardware
-                self._last_error = str(exc)
+                self._last_error = self._friendly_serial_error(exc)
                 logger.exception("Failed to connect to PLC on %s", self.config.port)
                 await self._close_client()
 
@@ -780,6 +780,21 @@ class PlcService:
 
     def _trace_connect(self, connected: bool) -> None:
         self._debug("serial_connect", port=self.config.port, connected=connected)
+
+    def _friendly_serial_error(self, exc: Exception) -> str:
+        text = str(exc)
+        normalized = text.lower()
+        if any(token in normalized for token in ("access is denied", "permissionerror", "acceso denegado")):
+            return (
+                f"El puerto {self.config.port} está ocupado o no permite acceso. "
+                "Cierre XDPPro u otra aplicación que esté usando el adaptador."
+            )
+        if any(token in normalized for token in ("filenotfounderror", "no such file", "no se encuentra")):
+            return (
+                f"El puerto {self.config.port} ya no está disponible. "
+                "Actualice la lista y revise el cable USB-RS485."
+            )
+        return f"No fue posible abrir {self.config.port}: {text}"
 
     @staticmethod
     def _now() -> str:

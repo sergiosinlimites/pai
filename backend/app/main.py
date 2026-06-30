@@ -20,6 +20,7 @@ from .models import (
     SimulatorModeRequest,
 )
 from .plc_service import PlcService
+from .serial_ports import discover_serial_ports
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -96,7 +97,10 @@ async def connect(config: Optional[ConfigUpdate] = Body(default=None)) -> PlcSna
     try:
         if config is not None:
             await service.configure(config, reconnect=False)
-        return await service.start()
+        snapshot = await service.start()
+        if snapshot.connected and not snapshot.simulator:
+            service.store.remember_serial_port(snapshot.config.port)
+        return snapshot
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -135,6 +139,21 @@ async def simulator_mode(request: SimulatorModeRequest) -> PlcSnapshot:
 @app.get("/api/settings", response_model=SettingsResponse)
 async def get_settings() -> dict:
     return service.store.settings()
+
+
+@app.get("/api/serial/ports")
+async def serial_ports() -> dict:
+    settings = service.store.settings()
+    snapshot = service.snapshot()
+    return discover_serial_ports(
+        configured_port=service.config.port,
+        last_successful_port=settings["last_serial_port"],
+        current_port_in_use=(
+            service.config.port
+            if snapshot.connected and not snapshot.simulator
+            else None
+        ),
+    )
 
 
 @app.put("/api/settings", response_model=SettingsResponse)

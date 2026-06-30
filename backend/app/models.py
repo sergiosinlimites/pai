@@ -97,6 +97,7 @@ class HealthResponse(BaseModel):
 class SettingsResponse(BaseModel):
     max_stack_size: int
     timezone: str
+    last_serial_port: Optional[str]
 
 
 class SettingsUpdate(BaseModel):

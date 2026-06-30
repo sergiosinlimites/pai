@@ -12,6 +12,8 @@ Aplicación web local para operar y supervisar la máquina de cajas predobladas 
 - Simulador local para validar toda la interfaz sin movimiento real.
 - Diagnóstico de sólo lectura; no se exponen mandos directos sobre salidas `Y`.
 - LEDs en vivo para las entradas `X` y salidas `Y` utilizadas por el secuencial.
+- Selector global de puertos seriales detectados, disponible desde las tres vistas.
+- Configuración separada en un panel lateral; Supervisión queda dedicada a producción.
 
 ## Ejecutar en Windows
 
@@ -37,25 +39,17 @@ npm.cmd --prefix frontend install
 npm.cmd --prefix frontend run dev
 ```
 
-Abrir `http://localhost:5173/`. El simulador se conecta automáticamente.
+Abrir `http://localhost:5173/`. La aplicación no se conecta automáticamente: el usuario confirma la conexión desde la cabecera.
 
 ## Conectar el PLC
 
-1. Abra Supervisión.
-2. Desactive `Usar simulador local`.
-3. Configure `COM9`, esclavo `1`, `19200` baud y poll `300 ms`.
-4. Pulse `Aplicar` y luego `Conectar`.
+1. Pulse el indicador de conexión de la esquina superior.
+2. Actualice la lista si acaba de conectar el adaptador USB-RS485.
+3. Seleccione uno de los puertos detectados y pulse `Conectar`.
 
-También puede iniciar directamente en modo real:
+La interfaz recuerda el último puerto que se conectó correctamente y lo sugiere en el siguiente arranque. Los puertos Bluetooth se muestran para diagnóstico, pero no se recomiendan. Los parámetros del PLC permanecen fijos en `19200 8E1`, esclavo `1`; el periodo de poll y las preferencias están en el engranaje global.
 
-```powershell
-cd backend
-$env:PLC_SIMULATOR = "false"
-$env:PLC_SERIAL_PORT = "COM9"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
-XDPPro y el backend no pueden usar `COM9` simultáneamente.
+XDPPro y el backend no pueden usar el mismo puerto simultáneamente. Si está ocupado, la HMI indica que debe cerrar XDPPro u otra aplicación serial.
 
 ## Contrato v2
 
@@ -73,8 +67,9 @@ La aplicación espera `D217 = 2`. No habilite movimiento real hasta terminar y v
 | Endpoint | Uso |
 |---|---|
 | `GET /api/status` | Estado decodificado del PLC |
+| `GET /api/serial/ports` | Puertos detectados, disponibilidad y sugerencia |
 | `POST /api/command` | `start`, `pause`, `resume`, `safe_stop`, `reset_counter`, `step`, `set_target` |
-| `GET /api/production/summary` | KPIs y producción horaria |
+| `GET /api/production/summary` | KPIs, producción horaria y tendencia de ciclo |
 | `GET /api/production/events` | Eventos de cajas |
 | `GET /api/production/stacks` | Histórico de stacks |
 | `GET /api/production/export.csv` | Exportación CSV |

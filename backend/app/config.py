@@ -20,7 +20,7 @@ class RuntimeConfig(BaseModel):
     poll_interval_ms: int = Field(default=300, ge=250, le=500)
     heartbeat_interval_ms: int = Field(default=1000, ge=250, le=5000)
     simulator: bool = Field(default=True)
-    auto_connect: bool = Field(default=True)
+    auto_connect: bool = Field(default=False)
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -53,7 +53,7 @@ def load_runtime_config() -> RuntimeConfig:
             poll_interval_ms=_int_env("PLC_POLL_INTERVAL_MS", 300),
             heartbeat_interval_ms=_int_env("PLC_HEARTBEAT_INTERVAL_MS", 1000),
             simulator=_bool_env("PLC_SIMULATOR", True),
-            auto_connect=_bool_env("PLC_AUTO_CONNECT", True),
+            auto_connect=_bool_env("PLC_AUTO_CONNECT", False),
         )
     )
 

@@ -99,6 +99,20 @@ class PlcServiceTests(unittest.TestCase):
 
         self.run_async(scenario())
 
+    def test_occupied_serial_port_has_actionable_error(self) -> None:
+        message = self.service._friendly_serial_error(
+            PermissionError("Access is denied")
+        )
+        self.assertIn("ocupado", message)
+        self.assertIn("XDPPro", message)
+
+    def test_missing_serial_port_has_actionable_error(self) -> None:
+        message = self.service._friendly_serial_error(
+            FileNotFoundError("No se encuentra el archivo especificado")
+        )
+        self.assertIn("no está disponible", message)
+        self.assertIn("USB-RS485", message)
+
 
 if __name__ == "__main__":
     unittest.main()
