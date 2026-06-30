@@ -1,95 +1,112 @@
-# Modbus Contract for PC-PLC Xinje XD3 HMI
+# Contrato Modbus v2 — HMI Xinje XD3
 
-This contract reserves `D200-D217` for the first local HMI integration. The PC is the only Modbus master. The PLC remains responsible for sequence authority, interlocks, actuators, and safety decisions.
+La aplicación PC es el único maestro Modbus RTU. El PLC es el único responsable de validar comandos, secuenciar movimientos y accionar salidas físicas.
 
-## Quick path
+## Comunicación
 
-1. Confirm in XDPPro that `D200-D217` are free.
-2. Configure the PLC RS-485 port as Modbus RTU slave `1`, `19200 8E1`.
-3. Let the PC write commands to `D200-D203` as one block.
-4. Let the PC poll `D210-D217` every `250-500 ms`.
-5. Treat the PC heartbeat as supervision only, not as a safety function.
+| Parámetro | Valor |
+|---|---:|
+| Esclavo | `1` |
+| Serial | `19200 8E1` |
+| Timeout | `500 ms` |
+| Reintentos | `2` |
+| Poll | `250–500 ms` |
+| Heartbeat | `1000 ms` |
 
-## PC to PLC registers
+## PC → PLC
 
-| PLC register | Modbus address | Name | Source | Rule |
-|---|---:|---|---|---|
-| `D200` | `200` | Requested stack size | PC | Operator target. PLC validates range. |
-| `D201` | `201` | Command code | PC | Decoded only when `D202` changes. |
-| `D202` | `202` | Request id | PC | Monotonic command id. Prevents duplicate execution. |
-| `D203` | `203` | Heartbeat | PC | Changes every `1 s`. |
-| `D204` | `204` | Y1 requested state | PC | `0` requests off, `1` requests on. PLC still owns interlocks. |
-| `D205` | `205` | Y1 request id | PC | Monotonic id. PLC applies `D204` only when this changes. |
+El backend escribe `D200-D203` mediante una sola función Modbus 16.
 
-Command writes must use function `16` / `0x10` for `D200-D203` in one transaction.
-
-## Command codes
-
-| Code | Command | PLC expectation |
-|---:|---|---|
-| `0` | None | No action. |
-| `1` | Start | Validate remote enabled, ready state, no fault, valid target. |
-| `2` | Pause | Controlled pause at a safe sequence point. |
-| `3` | Resume | Continue from controlled pause when valid. |
-| `4` | Safe stop | Stop at a safe condition, not emergency stop. |
-| `5` | Reset counter | Allowed only when stopped or otherwise explicitly safe. |
-| `6` | Confirm stack removed | Clear completed-stack wait state after operator removal. |
-
-## PLC to PC registers
-
-| PLC register | Modbus address | Name | Consumer |
-|---|---:|---|---|
-| `D210` | `210` | Machine state | HMI state label. |
-| `D211` | `211` | Processed count | HMI counter. |
-| `D212` | `212` | Accepted stack size | Confirms PLC validation. |
-| `D213` | `213` | Accepted request id | Confirms command processing. |
-| `D214` | `214` | Fault code | HMI fault indicator. |
-| `D215` | `215` | Status word | HMI decoded flags. |
-| `D216` | `216` | Current stage | GRAFCET or sequence stage. |
-| `D217` | `217` | Contract version | Compatibility check. |
-| `D220` | `220` | Example internal counter | HMI simple I/O panel. |
-| `D221` | `221` | Example input `X1` state | HMI simple I/O panel, `0` off and `1` on. |
-| `D222` | `222` | Example output `Y1` feedback | HMI simple I/O panel, actual PLC feedback. |
-
-## Machine states
-
-| Value | State |
-|---:|---|
-| `0` | Initializing |
-| `1` | Stopped |
-| `2` | Ready |
-| `3` | Running |
-| `4` | Paused |
-| `5` | Stack completed |
-| `6` | Waiting stack removal |
-| `7` | Fault |
-| `8` | Manual or maintenance |
-
-## Status word `D215`
-
-| Bit | Flag |
-|---:|---|
-| `0` | Remote enabled |
-| `1` | Machine ready |
-| `2` | Cycle active |
-| `3` | Pause active |
-| `4` | Stack completed |
-| `5` | Fault active |
-| `6` | Manual mode |
-| `7` | Heartbeat valid |
-| `8-15` | Reserved |
-
-## Timing and transaction rules
-
-| Topic | Rule |
+| Registro | Uso |
 |---|---|
-| Concurrent transactions | Never issue more than one Modbus transaction at a time on the PC. The backend uses an `asyncio.Lock`. |
-| Polling | Read `D210-D217` every `250-500 ms`. Default is `300 ms`. |
-| Heartbeat | Write `D203` every `1 s`. |
-| Timeout | `500 ms`. |
-| Retries | `2` retries after the first attempt. |
-| Duplicate commands | PLC executes only when `D202` differs from the last processed request id. |
+| `D200` | Objetivo positivo solicitado para el siguiente stack |
+| `D201` | Código de comando |
+| `D202` | Request ID; cada solicitud nueva usa otro valor |
+| `D203` | Heartbeat del backend |
 
-## Safety note
+| Código | Comando | Regla |
+|---:|---|---|
+| `1` | Iniciar | Sólo automático, máquina lista y permisos válidos |
+| `2` | Pausar | Sólo durante producción automática |
+| `3` | Reanudar | Sólo desde pausa automática |
+| `4` | Parada controlada | Utiliza la ruta de parada del secuencial |
+| `5` | Reiniciar stack actual | Nunca modifica el total retentivo |
+| `6` | Reservado | Código legado, no ejecutar |
+| `7` | Avanzar un paso | Sólo manual; máximo una transición |
+| `8` | Programar objetivo | Se aplica en el próximo límite de stack |
 
-The PC can request a controlled stop but must not implement emergency stop behavior. Emergency stop must remain hardwired and independent.
+Un mismo `D202` nunca puede ejecutarse dos veces. El PLC copia el ID a `D213` después de validar y procesar la solicitud.
+
+## PLC → PC
+
+El backend lee `D210-D219` en un solo bloque.
+
+| Registro | Uso |
+|---|---|
+| `D210` | Estado de máquina |
+| `D211` | Cajas del stack actual |
+| `D212` | Objetivo activo |
+| `D213` | Último request ID procesado |
+| `D214` | Falla o motivo de rechazo |
+| `D215` | Palabra de estado |
+| `D216` | Etapa activa `0–38` |
+| `D217` | Versión de contrato, siempre `2` |
+| `D218` | Palabra baja del total retentivo |
+| `D219` | Palabra alta del total retentivo |
+
+El total se decodifica como:
+
+```text
+total = D218 + (D219 << 16)
+```
+
+`HD0-HD1` son la fuente retentiva del PLC y se publican en `D218-D219`.
+
+### Estados `D210`
+
+| Valor | Estado |
+|---:|---|
+| `0` | Inicializando |
+| `1` | Detenida |
+| `2` | Lista |
+| `3` | Produciendo |
+| `4` | Pausada |
+| `5` | Transición entre stacks |
+| `7` | Falla |
+| `8` | Manual/mantenimiento |
+
+### Bits `D215`
+
+| Bit | Estado |
+|---:|---|
+| `0` | Remoto habilitado |
+| `1` | Máquina lista |
+| `2` | Ciclo activo |
+| `3` | Pausa activa |
+| `4` | Modo automático |
+| `5` | Falla activa |
+| `6` | Modo manual |
+| `7` | Heartbeat válido |
+
+### Fallas y rechazos `D214`
+
+| Código | Significado |
+|---:|---|
+| `0` | Sin falla |
+| `10` | Objetivo inválido |
+| `20` | Comando no permitido durante marcha |
+| `21` | Comando no permitido en el estado actual |
+| `22` | Reinicio requiere máquina detenida |
+| `23` | Comando legado reservado |
+| `24` | Paso requiere modo manual |
+| `25` | Paso bloqueado por interlocks |
+| `90` | Heartbeat remoto perdido |
+| `99` | Comando desconocido |
+
+Los rechazos de operación no deben accionar salidas. La falla `90` bloquea nuevos mandos y solicita la parada controlada definida por el PLC.
+
+## Seguridad
+
+- La HMI no escribe salidas `Y` ni expone el antiguo mando directo `Y1`.
+- El endpoint de escritura Modbus arbitraria está eliminado.
+- El paro de emergencia permanece físico e independiente del PC, USB, Modbus y red.

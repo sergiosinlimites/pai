@@ -11,7 +11,8 @@ CommandName = Literal[
     "resume",
     "safe_stop",
     "reset_counter",
-    "confirm_stack_removed",
+    "step",
+    "set_target",
 ]
 
 
@@ -32,31 +33,20 @@ class ConfigUpdate(BaseModel):
 
 class CommandRequest(BaseModel):
     command: CommandName
-    stack_size: Optional[int] = Field(default=None, ge=1, le=9999)
+    stack_size: Optional[int] = Field(default=None, ge=1, le=32767)
 
 
 class CommandResponse(BaseModel):
     accepted: bool
+    status: Literal["confirmed", "rejected", "timeout"]
+    message: str
     command: CommandName
     command_code: int
     request_id: int
     stack_size: int
     heartbeat: int
-
-
-class Y1Request(BaseModel):
-    active: bool
-
-
-class Y1Response(BaseModel):
-    accepted: bool
-    active: bool
-    request_id: int
-
-
-class DebugWriteRequest(BaseModel):
-    address: int = Field(ge=0, le=65535)
-    values: list[int] = Field(min_items=1, max_items=32)
+    fault_code: int
+    fault_label: str
 
 
 class PlcSnapshot(BaseModel):
@@ -71,6 +61,7 @@ class PlcSnapshot(BaseModel):
     heartbeat: int
     next_request_id: int
     requested_stack_size: int
+    pending_stack_size: int
     raw_registers: Dict[str, int]
     raw_io_registers: Dict[str, int]
     machine_state: int
@@ -83,7 +74,13 @@ class PlcSnapshot(BaseModel):
     status_word: int
     flags: Dict[str, bool]
     stage: int
+    stage_label: str
     contract_version: int
+    plc_total_count: int
+    historical_total: int
+    last_box_at: Optional[str]
+    command_status: str
+    command_message: str
     io_counter_value: int
     x1_active: bool
     y1_active: bool
@@ -95,3 +92,17 @@ class HealthResponse(BaseModel):
     connected: bool
     simulator: bool
     last_error: Optional[str]
+
+
+class SettingsResponse(BaseModel):
+    max_stack_size: int
+    timezone: str
+
+
+class SettingsUpdate(BaseModel):
+    max_stack_size: Optional[int] = Field(default=None, ge=1, le=32767)
+    timezone: Optional[str] = None
+
+
+class SimulatorModeRequest(BaseModel):
+    manual: bool

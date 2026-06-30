@@ -1,13 +1,24 @@
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from fastapi.staticfiles import StaticFiles
 
 from .config import load_runtime_config
-from .models import CommandRequest, ConfigUpdate, DebugWriteRequest, HealthResponse, PlcSnapshot, Y1Request
+from .models import (
+    CommandRequest,
+    ConfigUpdate,
+    HealthResponse,
+    PlcSnapshot,
+    SettingsResponse,
+    SettingsUpdate,
+    SimulatorModeRequest,
+)
 from .plc_service import PlcService
 
 logging.basicConfig(
@@ -42,11 +53,11 @@ class WebSocketHub:
 hub = WebSocketHub()
 service = PlcService(load_runtime_config(), on_state=hub.broadcast)
 
-app = FastAPI(title="PC-PLC Xinje XD3 Local HMI", version="0.1.0")
+app = FastAPI(title="PC-PLC Xinje XD3 Local HMI", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -60,7 +71,7 @@ async def on_startup() -> None:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    await service.stop()
+    await service.shutdown()
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -107,21 +118,71 @@ async def update_config(config: ConfigUpdate) -> PlcSnapshot:
 async def command(request: CommandRequest):
     try:
         return await service.send_command(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@app.post("/api/io/y1")
-async def set_y1(request: Y1Request):
+@app.post("/api/simulator/mode", response_model=PlcSnapshot)
+async def simulator_mode(request: SimulatorModeRequest) -> PlcSnapshot:
     try:
-        return await service.set_y1(request)
+        return await service.set_simulator_mode(request.manual)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/settings", response_model=SettingsResponse)
+async def get_settings() -> dict:
+    return service.store.settings()
+
+
+@app.put("/api/settings", response_model=SettingsResponse)
+async def update_settings(request: SettingsUpdate) -> dict:
+    try:
+        return service.store.update_settings(
+            max_stack_size=request.max_stack_size,
+            timezone_name=request.timezone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/production/summary")
+async def production_summary() -> dict:
+    return service.store.summary()
+
+
+@app.get("/api/production/events")
+async def production_events(limit: int = Query(50, ge=1, le=500)) -> dict:
+    return {"entries": service.store.recent_events(limit)}
+
+
+@app.get("/api/production/stacks")
+async def production_stacks(limit: int = Query(50, ge=1, le=500)) -> dict:
+    return {"entries": service.store.stacks(limit)}
+
+
+@app.get("/api/production/export.csv")
+async def production_export() -> Response:
+    return Response(
+        content=service.store.export_csv(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="produccion-cajas.csv"'},
+    )
 
 
 @app.get("/api/debug/log")
 async def debug_log():
     return {"entries": service.debug_log()}
+
+
+@app.get("/api/console/io")
+async def console_io() -> dict:
+    try:
+        return await service.read_physical_io()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/debug/read")
@@ -131,14 +192,6 @@ async def debug_read(
 ):
     try:
         return await service.debug_read_registers(address, count)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@app.post("/api/debug/write")
-async def debug_write(request: DebugWriteRequest):
-    try:
-        return await service.debug_write_registers(request.address, request.values)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -164,3 +217,10 @@ async def state_websocket(websocket: WebSocket) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         hub.disconnect(websocket)
+
+
+# In production, `npm run build` lets this same local service host the HMI.
+# During development Vite continues to proxy /api and /ws to FastAPI.
+frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if frontend_dist.exists():
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="hmi")

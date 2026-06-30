@@ -17,5 +17,8 @@ npm-debug.log*
 # Local runtime
 .env
 *.log
+backend/data/
+*.db-wal
+*.db-shm
 .DS_Store
 .agents/

@@ -4,11 +4,11 @@ Implement this as a small communication layer around the existing PLC sequence. 
 
 ## Quick path
 
-1. Reserve and document `D200-D217`.
+1. Reserve and document `D200-D219`.
 2. Configure Port 2 / RS-485 as Modbus RTU slave `1`, `19200 8E1`.
 3. Add request-edge detection using `D202`.
 4. Decode command `D201` only after a new request id appears.
-5. Mirror machine state, counters, faults, status word, and sequence stage into `D210-D217`.
+5. Mirror machine state, counters, faults, status word, sequence stage, contract version and total into `D210-D219`.
 6. Add a heartbeat watchdog for `D203`.
 7. Bench test with outputs disabled before linking commands to motion.
 
@@ -29,7 +29,7 @@ Use the actual XDPPro symbol/register style used by the project. The names above
 
 ### 1. Communication map guard
 
-- Confirm `D200-D217` are not used by the existing ladder.
+- Confirm `D200-D219` are not used by the existing ladder.
 - Add comments in XDPPro for every register.
 - Do not map a PC command directly to a physical output coil.
 
@@ -42,7 +42,7 @@ On a new command request:
 3. If valid, copy to `D212`.
 4. If invalid, set a fault code in `D214` and reject start.
 
-The initial software allows `1-9999`, but the final PLC range should be the real mechanical limit.
+The PLC validates a positive value. The HMI maximum is configurable and starts at `100`.
 
 ### 3. Request id edge detection
 
@@ -67,7 +67,9 @@ Decode `D201` only on `NewRequestPulse`:
 | `3` | Resume only from a valid paused state. |
 | `4` | Stop at a safe controlled condition. |
 | `5` | Reset count only in stopped/ready states. |
-| `6` | Clear completed-stack wait state after the operator confirms removal. |
+| `6` | Reserved legacy code; do not execute motion. |
+| `7` | Advance at most one transition while the physical selector is in manual. |
+| `8` | Store the target for the next stack. |
 
 ### 5. State exposure
 
@@ -79,9 +81,10 @@ Update these every scan or at a stable sequence boundary:
 | `D211` | Count of completed cycles or verified products. Be explicit which one it means. |
 | `D212` | Current accepted stack size. |
 | `D214` | Current fault code, `0` when no fault. |
-| `D215` | Bit flags for remote enabled, ready, active, paused, complete, fault, manual, heartbeat valid. |
+| `D215` | Bit flags for remote enabled, ready, active, paused, automatic, fault, manual, heartbeat valid. |
 | `D216` | Current GRAFCET/sequence stage. |
-| `D217` | Contract version, currently `1`. |
+| `D217` | Contract version, currently `2`. |
+| `D218-D219` | Retentive 32-bit historical total, low word first. |
 
 ### 6. Heartbeat watchdog
 
@@ -102,8 +105,9 @@ Before linking remote commands to movement:
 
 ## Checklist
 
-- [ ] `D200-D217` are reserved and commented.
+- [ ] `D200-D219` are reserved and commented.
 - [ ] PLC serial settings match `19200 8E1`, slave `1`.
 - [ ] Request id edge detection is implemented.
-- [ ] Command `6` cannot restart motion; it only confirms stack removal.
+- [ ] Command `6` is rejected/reserved and cannot start motion.
+- [ ] Commands `7` and physical `X1` consume a one-scan manual token.
 - [ ] Emergency stop remains hardwired and independent.

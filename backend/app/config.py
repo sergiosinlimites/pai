@@ -3,11 +3,13 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
+DEFAULT_SERIAL_PORT = "COM9" if os.name == "nt" else "/dev/ttyUSB0"
+
 
 class RuntimeConfig(BaseModel):
     """Runtime communication settings for the PLC link."""
 
-    port: str = Field(default="/dev/ttyUSB0", description="Serial port for the USB-RS485 adapter")
+    port: str = Field(default=DEFAULT_SERIAL_PORT, description="Serial port for the USB-RS485 adapter")
     slave_id: int = Field(default=1, ge=1, le=247)
     baudrate: int = Field(default=19200)
     bytesize: int = Field(default=8)
@@ -40,7 +42,7 @@ def load_runtime_config() -> RuntimeConfig:
 
     return validate_runtime_config(
         RuntimeConfig(
-            port=os.getenv("PLC_SERIAL_PORT", "/dev/ttyUSB0"),
+            port=os.getenv("PLC_SERIAL_PORT", DEFAULT_SERIAL_PORT),
             slave_id=_int_env("PLC_SLAVE_ID", 1),
             baudrate=_int_env("PLC_BAUDRATE", 19200),
             bytesize=_int_env("PLC_BYTESIZE", 8),

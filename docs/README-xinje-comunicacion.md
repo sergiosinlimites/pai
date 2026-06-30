@@ -1,5 +1,7 @@
 # README Xinje: lectura, escritura y diagrama PC-PLC
 
+> **Documento de banco/legado:** las secciones de `Y1 ON/OFF`, `D204-D205` y contrato v1 se conservan como evidencia de la primera prueba. La HMI de producción ya no expone mando directo de `Y1`. Para la integración vigente use `modbus-contract.md` y `PLC-v2-XDPPro-implementation.md`.
+
 Este documento explica como leer y mandar valores usando programacion Xinje/XDPPro para la integracion con la HMI del PC.
 
 Hay dos casos distintos:
@@ -371,6 +373,113 @@ App -> PLC:
 Y1 pedido -> D204
 Nueva orden -> D205
 ```
+
+### Como activar cada parte de la interfaz
+
+La interfaz tiene dos niveles de prueba:
+
+| Programa cargado en el PLC | Partes de la app disponibles |
+|---|---|
+| `PLC1.xdp` de prueba | Conexion, lectura de `X1`, control de `Y1`, contador `D220` y debug Modbus |
+| Secuencial completo con las rungs de `README-plan-stack-final-xinje.md` | Todo lo anterior mas `Start`, `Pause`, `Resume`, `Safe stop`, reset, confirmacion de retiro y estados del proceso |
+
+El programa `PLC1.xdp` no procesa los comandos generales `D200-D203`. Por eso, con ese programa los botones de `Operator controls` pueden escribir correctamente por Modbus, pero no deben iniciar ni pausar la maquina. Para activar esos botones hay que integrar primero las rungs `PC-000` a `PC-016` al final del secuencial completo.
+
+#### 1. Activar la conexion
+
+1. Descargar el ladder al PLC desde Xinje Program Tool.
+2. Poner el PLC en `RUN` y confirmar `Run, Scan Cycle: ...`.
+3. Cerrar Xinje Program Tool para liberar `COM9`.
+4. Iniciar backend y frontend.
+5. En `Connection`, desmarcar `Simulator mode`.
+6. Escribir `COM9`, esclavo `1`, baudrate `19200` y poll `300`.
+7. Pulsar `Apply config` para guardar los campos.
+8. Pulsar `Connect` para abrir el puerto.
+9. Confirmar arriba `Connected` y `Modbus RTU`.
+
+`Apply config` actualiza la configuracion del backend. `Connect` es el boton que realmente abre `COM9`. `Disconnect` cierra el puerto y permite volver a usar Xinje Program Tool.
+
+#### 2. Activar la prueba de entrada X1
+
+No hay que pulsar ningun boton en la app:
+
+1. Mantener presionado el pulsador fisico conectado a `X1`.
+2. El ladder escribe `D221 = 1`.
+3. En `Input X1 / D221` debe aparecer `ON`.
+4. Al soltarlo, el ladder escribe `D221 = 0` y la interfaz muestra `OFF`.
+
+Si no cambia, comprobar primero que el PLC siga en `RUN`.
+
+#### 3. Activar la prueba de salida Y1
+
+1. Pulsar `Y1 ON`.
+2. La app escribe `D204 = 1` y aumenta el request id `D205`.
+3. El ladder detecta `D205 <> D306`, valida `M307` y ejecuta `SET Y1`.
+4. El PLC publica `D222 = 1` y la interfaz muestra `ON`.
+5. Pulsar `Y1 OFF` para escribir `D204 = 0`, ejecutar `RST Y1` y publicar `D222 = 0`.
+
+Esta salida solo debe probarse con el montaje en una condicion mecanica y electrica segura. En el programa final, `M307` debe representar los permisos e interlocks reales.
+
+#### 4. Activar un ciclo con cantidad de stack
+
+Esta parte requiere el secuencial completo integrado, no solamente `PLC1.xdp`.
+
+1. Escribir la cantidad deseada en `Stack size`, por ejemplo `20`.
+2. Verificar que la maquina muestre estado `ready`.
+3. Pulsar `Start`.
+4. La app escribe en una sola transaccion:
+   - `D200 = 20`: cantidad solicitada.
+   - `D201 = 1`: comando Start.
+   - `D202`: request id nuevo.
+   - `D203`: heartbeat actual.
+5. El PLC valida la cantidad, copia el objetivo aceptado a `D0` y `D212`, y confirma el request en `D213`.
+6. Durante el ciclo, el PLC publica las plantillas procesadas en `D211`.
+
+Los indicadores superiores se alimentan asi:
+
+| Indicador | Registro del PLC |
+|---|---|
+| `Machine state` | `D210` |
+| `Requested stack` | Ultimo valor enviado en `D200` |
+| `Accepted stack` | `D212` |
+| `Processed count` | `D211` |
+| `Stage` | `D216` |
+| `Fault` | `D214` |
+
+#### 5. Activar los comandos del proceso
+
+Los botones escriben un nuevo codigo en `D201` y un request id nuevo en `D202`:
+
+| Boton | Codigo | Condicion que debe validar el PLC |
+|---|---:|---|
+| `Start` | `1` | Maquina lista, remoto permitido, sin falla e interlocks validos |
+| `Pause` | `2` | Ciclo en ejecucion; detenerse en un punto seguro |
+| `Resume` | `3` | Maquina pausada y condiciones seguras |
+| `Safe stop` | `4` | Solicitar parada controlada; no sustituye la emergencia fisica |
+| `Reset counter` | `5` | Maquina detenida o lista |
+| `Confirm stack removed` | `6` | PLC esperando el retiro del stack terminado |
+
+El paro de emergencia no se activa desde esta app. Debe seguir siendo un circuito fisico independiente.
+
+#### 6. Interpretar Runtime details
+
+| Campo | Uso |
+|---|---|
+| `Accepted request id` | Valor `D213`; confirma que el PLC proceso el ultimo comando |
+| `Next request id` | Id que usara la app en el siguiente comando |
+| `Heartbeat` | Valor que la app actualiza automaticamente en `D203` |
+| `Status word` | `D215`, con permisos y estados codificados en bits |
+| `Contract version` | `D217`; debe coincidir con la version esperada |
+| `Last error` | Ultimo error de puerto, timeout o transaccion Modbus |
+
+#### 7. Usar el panel Modbus debug
+
+- `Read D204-D222` muestra los registros usados por la prueba y el estado.
+- `Refresh log` muestra tramas RTU transmitidas y recibidas.
+- `D204/D205` prueban que la orden de `Y1` salio de la app.
+- Leer `D300-D309` desde `/api/debug/read?address=300&count=10` permite comprobar que `D306 = D205` y que el ladder proceso la orden.
+- `D221` prueba que el ladder publico `X1`.
+- `D222` prueba que el ladder publico el estado real de `Y1`.
 
 ### Debug crudo de Modbus
 
