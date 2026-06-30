@@ -2,12 +2,12 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import load_runtime_config
-from .models import CommandRequest, ConfigUpdate, HealthResponse, PlcSnapshot
+from .models import CommandRequest, ConfigUpdate, DebugWriteRequest, HealthResponse, PlcSnapshot, Y1Request
 from .plc_service import PlcService
 
 logging.basicConfig(
@@ -107,6 +107,50 @@ async def update_config(config: ConfigUpdate) -> PlcSnapshot:
 async def command(request: CommandRequest):
     try:
         return await service.send_command(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/io/y1")
+async def set_y1(request: Y1Request):
+    try:
+        return await service.set_y1(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/debug/log")
+async def debug_log():
+    return {"entries": service.debug_log()}
+
+
+@app.get("/api/debug/read")
+async def debug_read(
+    address: int = Query(204, ge=0, le=65535),
+    count: int = Query(19, ge=1, le=64),
+):
+    try:
+        return await service.debug_read_registers(address, count)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/debug/write")
+async def debug_write(request: DebugWriteRequest):
+    try:
+        return await service.debug_write_registers(request.address, request.values)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/debug/coils")
+async def debug_coils(
+    address: int = Query(20480, ge=0, le=65535),
+    count: int = Query(8, ge=1, le=64),
+    prefix: str = Query("X", min_length=1, max_length=4),
+):
+    try:
+        return await service.debug_read_coils(address, count, prefix)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

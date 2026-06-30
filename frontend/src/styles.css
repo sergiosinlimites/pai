@@ -146,6 +146,11 @@ small {
   margin-bottom: 1rem;
 }
 
+.io-grid {
+  grid-template-columns: repeat(3, 1fr);
+  margin-bottom: 1rem;
+}
+
 .two-columns {
   grid-template-columns: 1.1fr 0.9fr;
   margin-bottom: 1rem;
@@ -216,6 +221,13 @@ small {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.inline-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
 .compact-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -261,8 +273,40 @@ small {
   padding: 1rem;
 }
 
+.debug-panel {
+  margin-top: 1rem;
+}
+
+.debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 1rem;
+}
+
+.debug-output {
+  min-height: 220px;
+  max-height: 360px;
+  overflow: auto;
+  border-radius: 14px;
+  background: #101820;
+  color: #d7e2ee;
+  padding: 1rem;
+  white-space: pre-wrap;
+}
+
 .fault-text {
   color: #b42318;
+}
+
+.ok-text {
+  color: #16703b;
 }
 
 @media (max-width: 920px) {
@@ -276,12 +320,18 @@ small {
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .io-grid {
+    grid-template-columns: 1fr;
+  }
+
   .state-panel {
     grid-column: span 2;
   }
 
   .details-list,
+  .debug-grid,
   .compact-grid,
+  .inline-actions,
   .connection-actions {
     grid-template-columns: 1fr;
   }

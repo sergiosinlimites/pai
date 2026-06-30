@@ -18,6 +18,8 @@ This contract reserves `D200-D217` for the first local HMI integration. The PC i
 | `D201` | `201` | Command code | PC | Decoded only when `D202` changes. |
 | `D202` | `202` | Request id | PC | Monotonic command id. Prevents duplicate execution. |
 | `D203` | `203` | Heartbeat | PC | Changes every `1 s`. |
+| `D204` | `204` | Y1 requested state | PC | `0` requests off, `1` requests on. PLC still owns interlocks. |
+| `D205` | `205` | Y1 request id | PC | Monotonic id. PLC applies `D204` only when this changes. |
 
 Command writes must use function `16` / `0x10` for `D200-D203` in one transaction.
 
@@ -45,6 +47,9 @@ Command writes must use function `16` / `0x10` for `D200-D203` in one transactio
 | `D215` | `215` | Status word | HMI decoded flags. |
 | `D216` | `216` | Current stage | GRAFCET or sequence stage. |
 | `D217` | `217` | Contract version | Compatibility check. |
+| `D220` | `220` | Example internal counter | HMI simple I/O panel. |
+| `D221` | `221` | Example input `X1` state | HMI simple I/O panel, `0` off and `1` on. |
+| `D222` | `222` | Example output `Y1` feedback | HMI simple I/O panel, actual PLC feedback. |
 
 ## Machine states
 

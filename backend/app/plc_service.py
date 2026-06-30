@@ -2,8 +2,9 @@ import asyncio
 import inspect
 import logging
 import time
+from collections import deque
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, Deque, List, Optional
 
 from pymodbus.client import AsyncModbusSerialClient
 
@@ -12,14 +13,18 @@ from .modbus_contract import (
     COMMAND_CODES,
     COMMAND_START_REGISTER,
     CONTRACT_VERSION,
+    IO_COMMAND_START_REGISTER,
+    IO_STATUS_REGISTER_COUNT,
+    IO_STATUS_START_REGISTER,
     STATUS_REGISTER_COUNT,
     STATUS_START_REGISTER,
     decode_status_word,
     fault_label,
+    io_status_register_names,
     state_label,
     status_register_names,
 )
-from .models import CommandRequest, CommandResponse, ConfigUpdate, PlcSnapshot
+from .models import CommandRequest, CommandResponse, ConfigUpdate, PlcSnapshot, Y1Request, Y1Response
 
 StateCallback = Callable[[PlcSnapshot], Awaitable[None]]
 logger = logging.getLogger(__name__)
@@ -42,8 +47,11 @@ class PlcService:
         self._last_command_at: Optional[str] = None
         self._heartbeat = 0
         self._request_id = 0
-        self._requested_stack_size = 1
+        self._io_request_id = 0
+        self._requested_stack_size = 20
         self._last_sim_increment = time.monotonic()
+        self._debug_log: Deque[dict] = deque(maxlen=300)
+        self._debug_registers: dict[int, int] = {}
         self._registers = [
             2,  # D210 machine state: ready
             0,  # D211 processed count
@@ -53,6 +61,11 @@ class PlcService:
             0,  # D215 status word
             0,  # D216 stage
             CONTRACT_VERSION,  # D217 contract version
+        ]
+        self._io_registers = [
+            0,  # D220 internal counter value
+            0,  # D221 X1 input state
+            0,  # D222 Y1 output feedback
         ]
         self._set_status_bits(remote=True, ready=True, heartbeat_valid=True)
 
@@ -74,18 +87,23 @@ class PlcService:
                 parity=self.config.parity,
                 stopbits=self.config.stopbits,
                 timeout=self.config.timeout_ms / 1000,
+                retries=self.config.retries,
+                trace_packet=self._trace_packet,
+                trace_connect=self._trace_connect,
             )
             try:
                 self._connected = bool(await self._client.connect())
                 if not self._connected:
                     self._last_error = f"Could not open serial Modbus port {self.config.port}"
                     logger.error(self._last_error)
+                    await self._close_client()
                 else:
                     logger.info("Connected to PLC on %s", self.config.port)
             except Exception as exc:  # pragma: no cover - depends on local serial hardware
                 self._last_error = str(exc)
                 self._connected = False
                 logger.exception("Failed to connect to PLC on %s", self.config.port)
+                await self._close_client()
 
         if self._connected:
             self._running = True
@@ -105,11 +123,7 @@ class PlcService:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
 
-        if self._client is not None:
-            close_result = self._client.close()
-            if asyncio.iscoroutine(close_result):
-                await close_result
-            self._client = None
+        await self._close_client()
 
         self._connected = False
         logger.info("PLC service stopped")
@@ -166,6 +180,26 @@ class PlcService:
             heartbeat=self._heartbeat,
         )
 
+    async def set_y1(self, request: Y1Request) -> Y1Response:
+        if not self._connected:
+            raise RuntimeError("PLC link is not connected")
+
+        self._io_request_id = 1 if self._io_request_id >= 32767 else self._io_request_id + 1
+        values = [1 if request.active else 0, self._io_request_id]
+
+        await self._execute_transaction(
+            "Y1 request write",
+            lambda: self._write_y1_request(values),
+        )
+        self._last_command_at = self._now()
+        logger.info(
+            "Y1 request sent: active=%s request_id=%s",
+            request.active,
+            self._io_request_id,
+        )
+        await self._publish()
+        return Y1Response(accepted=True, active=request.active, request_id=self._io_request_id)
+
     async def poll_once(self) -> PlcSnapshot:
         if not self._connected:
             return self.snapshot()
@@ -173,9 +207,91 @@ class PlcService:
             "status poll",
             self._read_status_registers,
         )
+        self._io_registers = await self._execute_transaction(
+            "simple I/O poll",
+            self._read_io_status_registers,
+        )
         self._last_poll_at = self._now()
         await self._publish()
         return self.snapshot()
+
+    async def _close_client(self) -> None:
+        if self._client is None:
+            return
+        close_result = self._client.close()
+        if inspect.isawaitable(close_result):
+            await close_result
+        self._client = None
+
+    def debug_log(self) -> list[dict]:
+        return list(self._debug_log)
+
+    async def debug_read_registers(self, address: int, count: int) -> dict:
+        if not self._connected:
+            raise RuntimeError("PLC link is not connected")
+        if self.config.simulator:
+            registers = self._read_simulated_registers(address, count)
+            self._debug("sim_read_ok", label="debug_read", address=address, count=count, registers=registers)
+            return {
+                "address": address,
+                "count": count,
+                "registers": registers,
+                "labels": {f"D{address + index}": value for index, value in enumerate(registers)},
+            }
+        registers = await self._execute_transaction(
+            f"debug read D{address}",
+            lambda: self._read_holding_registers("debug_read", address, count),
+        )
+        return {
+            "address": address,
+            "count": count,
+            "registers": registers,
+            "labels": {f"D{address + index}": value for index, value in enumerate(registers)},
+        }
+
+    async def debug_write_registers(self, address: int, values: list[int]) -> dict:
+        if not self._connected:
+            raise RuntimeError("PLC link is not connected")
+        if self.config.simulator:
+            self._write_simulated_registers(address, values)
+            self._debug("sim_write_ok", label="debug_write", address=address, values=values)
+            return {
+                "address": address,
+                "values": values,
+                "labels": {f"D{address + index}": value for index, value in enumerate(values)},
+            }
+        await self._execute_transaction(
+            f"debug write D{address}",
+            lambda: self._write_holding_registers("debug_write", address, values),
+        )
+        return {
+            "address": address,
+            "values": values,
+            "labels": {f"D{address + index}": value for index, value in enumerate(values)},
+        }
+
+    async def debug_read_coils(self, address: int, count: int, prefix: str = "M") -> dict:
+        if not self._connected:
+            raise RuntimeError("PLC link is not connected")
+        if self.config.simulator:
+            values = [False for _ in range(count)]
+            self._debug("sim_read_coils_ok", label="debug_read_coils", address=address, count=count, values=values)
+            return {
+                "address": address,
+                "count": count,
+                "values": values,
+                "labels": {f"{prefix}{index}": value for index, value in enumerate(values)},
+            }
+        values = await self._execute_transaction(
+            f"debug read coils {address}",
+            lambda: self._read_coils("debug_read_coils", address, count),
+        )
+        return {
+            "address": address,
+            "count": count,
+            "values": values,
+            "labels": {f"{prefix}{index}": value for index, value in enumerate(values)},
+        }
 
     async def heartbeat_once(self) -> PlcSnapshot:
         if not self._connected:
@@ -191,7 +307,9 @@ class PlcService:
 
     def snapshot(self) -> PlcSnapshot:
         registers = list(self._registers)
+        io_registers = list(self._io_registers)
         raw = {name: registers[index] for index, name in enumerate(status_register_names())}
+        raw_io = {name: io_registers[index] for index, name in enumerate(io_status_register_names())}
         return PlcSnapshot(
             config=self.config,
             connected=self._connected,
@@ -205,6 +323,7 @@ class PlcService:
             next_request_id=1 if self._request_id >= 32767 else self._request_id + 1,
             requested_stack_size=self._requested_stack_size,
             raw_registers=raw,
+            raw_io_registers=raw_io,
             machine_state=registers[0],
             machine_state_label=state_label(registers[0]),
             processed_count=registers[1],
@@ -216,6 +335,9 @@ class PlcService:
             flags=decode_status_word(registers[5]),
             stage=registers[6],
             contract_version=registers[7],
+            io_counter_value=io_registers[0],
+            x1_active=bool(io_registers[1]),
+            y1_active=bool(io_registers[2]),
         )
 
     async def _poll_loop(self) -> None:
@@ -266,14 +388,15 @@ class PlcService:
 
         if self._client is None:
             raise RuntimeError("Modbus client is not initialized")
-        result = await self._client.read_holding_registers(
-            address=STATUS_START_REGISTER,
-            count=STATUS_REGISTER_COUNT,
-            **self._device_kwargs(self._client.read_holding_registers),
-        )
-        if result.isError():
-            raise RuntimeError(str(result))
-        return list(result.registers)
+        return await self._read_holding_registers("status", STATUS_START_REGISTER, STATUS_REGISTER_COUNT)
+
+    async def _read_io_status_registers(self) -> List[int]:
+        if self.config.simulator:
+            return list(self._io_registers)
+
+        if self._client is None:
+            raise RuntimeError("Modbus client is not initialized")
+        return await self._read_holding_registers("simple_io", IO_STATUS_START_REGISTER, IO_STATUS_REGISTER_COUNT)
 
     async def _write_command_registers(self, values: List[int]) -> List[int]:
         if self.config.simulator:
@@ -282,13 +405,17 @@ class PlcService:
 
         if self._client is None:
             raise RuntimeError("Modbus client is not initialized")
-        result = await self._client.write_registers(
-            address=COMMAND_START_REGISTER,
-            values=values,
-            **self._device_kwargs(self._client.write_registers),
-        )
-        if result.isError():
-            raise RuntimeError(str(result))
+        await self._write_holding_registers("command", COMMAND_START_REGISTER, values)
+        return values
+
+    async def _write_y1_request(self, values: List[int]) -> List[int]:
+        if self.config.simulator:
+            self._io_registers[2] = values[0]
+            return values
+
+        if self._client is None:
+            raise RuntimeError("Modbus client is not initialized")
+        await self._write_holding_registers("y1_request", IO_COMMAND_START_REGISTER, values)
         return values
 
     async def _write_heartbeat(self, heartbeat: int) -> List[int]:
@@ -305,7 +432,56 @@ class PlcService:
         )
         if result.isError():
             raise RuntimeError(str(result))
+        self._debug(
+            "modbus_write_ok",
+            label="heartbeat",
+            address=COMMAND_START_REGISTER + 3,
+            values=[heartbeat],
+        )
         return [heartbeat]
+
+    async def _read_holding_registers(self, label: str, address: int, count: int) -> List[int]:
+        if self._client is None:
+            raise RuntimeError("Modbus client is not initialized")
+        result = await self._client.read_holding_registers(
+            address=address,
+            count=count,
+            **self._device_kwargs(self._client.read_holding_registers),
+        )
+        if result.isError():
+            self._debug("modbus_read_error", label=label, address=address, count=count, error=str(result))
+            raise RuntimeError(str(result))
+        registers = list(result.registers)
+        self._debug("modbus_read_ok", label=label, address=address, count=count, registers=registers)
+        return registers
+
+    async def _write_holding_registers(self, label: str, address: int, values: list[int]) -> None:
+        if self._client is None:
+            raise RuntimeError("Modbus client is not initialized")
+        result = await self._client.write_registers(
+            address=address,
+            values=values,
+            **self._device_kwargs(self._client.write_registers),
+        )
+        if result.isError():
+            self._debug("modbus_write_error", label=label, address=address, values=values, error=str(result))
+            raise RuntimeError(str(result))
+        self._debug("modbus_write_ok", label=label, address=address, values=values)
+
+    async def _read_coils(self, label: str, address: int, count: int) -> List[bool]:
+        if self._client is None:
+            raise RuntimeError("Modbus client is not initialized")
+        result = await self._client.read_coils(
+            address=address,
+            count=count,
+            **self._device_kwargs(self._client.read_coils),
+        )
+        if result.isError():
+            self._debug("modbus_read_coils_error", label=label, address=address, count=count, error=str(result))
+            raise RuntimeError(str(result))
+        values = list(result.bits[:count])
+        self._debug("modbus_read_coils_ok", label=label, address=address, count=count, values=values)
+        return values
 
     def _apply_simulated_command(self, values: List[int]) -> None:
         stack_size, command_code, request_id, heartbeat = values
@@ -386,11 +562,35 @@ class PlcService:
             return
         self._last_sim_increment = now
         self._registers[1] = min(self._registers[1] + 1, accepted_target)
+        self._io_registers[0] = self._registers[1]
+        self._io_registers[1] = 1 if self._registers[1] % 2 else 0
         self._registers[6] = 10 + (self._registers[1] % 4)
         if self._registers[1] >= accepted_target:
             self._registers[0] = 5
             self._registers[6] = 90
             self._set_status_bits(remote=True, completed=True, heartbeat_valid=True)
+
+    def _read_simulated_registers(self, address: int, count: int) -> List[int]:
+        values = []
+        for current in range(address, address + count):
+            if current in self._debug_registers:
+                values.append(self._debug_registers[current])
+            elif STATUS_START_REGISTER <= current < STATUS_START_REGISTER + STATUS_REGISTER_COUNT:
+                values.append(self._registers[current - STATUS_START_REGISTER])
+            elif IO_STATUS_START_REGISTER <= current < IO_STATUS_START_REGISTER + IO_STATUS_REGISTER_COUNT:
+                values.append(self._io_registers[current - IO_STATUS_START_REGISTER])
+            else:
+                values.append(0)
+        return values
+
+    def _write_simulated_registers(self, address: int, values: list[int]) -> None:
+        for index, value in enumerate(values):
+            current = address + index
+            self._debug_registers[current] = value
+            if IO_STATUS_START_REGISTER <= current < IO_STATUS_START_REGISTER + IO_STATUS_REGISTER_COUNT:
+                self._io_registers[current - IO_STATUS_START_REGISTER] = value
+            if STATUS_START_REGISTER <= current < STATUS_START_REGISTER + STATUS_REGISTER_COUNT:
+                self._registers[current - STATUS_START_REGISTER] = value
 
     def _fault(self, fault_code: int) -> None:
         self._registers[0] = 7
@@ -431,6 +631,18 @@ class PlcService:
     async def _publish(self) -> None:
         if self._on_state is not None:
             await self._on_state(self.snapshot())
+
+    def _debug(self, event: str, **data) -> None:
+        entry = {"time": self._now(), "event": event, **data}
+        self._debug_log.append(entry)
+        logger.debug("Modbus debug: %s", entry)
+
+    def _trace_packet(self, sending: bool, data: bytes) -> bytes:
+        self._debug("rtu_tx" if sending else "rtu_rx", hex=data.hex(" "))
+        return data
+
+    def _trace_connect(self, connected: bool) -> None:
+        self._debug("serial_connect", port=self.config.port, connected=connected)
 
     @staticmethod
     def _now() -> str:

@@ -44,6 +44,21 @@ class CommandResponse(BaseModel):
     heartbeat: int
 
 
+class Y1Request(BaseModel):
+    active: bool
+
+
+class Y1Response(BaseModel):
+    accepted: bool
+    active: bool
+    request_id: int
+
+
+class DebugWriteRequest(BaseModel):
+    address: int = Field(ge=0, le=65535)
+    values: list[int] = Field(min_items=1, max_items=32)
+
+
 class PlcSnapshot(BaseModel):
     config: RuntimeConfig
     connected: bool
@@ -57,6 +72,7 @@ class PlcSnapshot(BaseModel):
     next_request_id: int
     requested_stack_size: int
     raw_registers: Dict[str, int]
+    raw_io_registers: Dict[str, int]
     machine_state: int
     machine_state_label: str
     processed_count: int
@@ -68,6 +84,9 @@ class PlcSnapshot(BaseModel):
     flags: Dict[str, bool]
     stage: int
     contract_version: int
+    io_counter_value: int
+    x1_active: bool
+    y1_active: bool
 
 
 class HealthResponse(BaseModel):

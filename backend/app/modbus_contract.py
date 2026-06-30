@@ -1,7 +1,11 @@
 COMMAND_START_REGISTER = 200
 COMMAND_REGISTER_COUNT = 4
+IO_COMMAND_START_REGISTER = 204
+IO_COMMAND_REGISTER_COUNT = 2
 STATUS_START_REGISTER = 210
 STATUS_REGISTER_COUNT = 8
+IO_STATUS_START_REGISTER = 220
+IO_STATUS_REGISTER_COUNT = 3
 CONTRACT_VERSION = 1
 
 COMMAND_CODES = {
@@ -65,3 +69,7 @@ def decode_status_word(word: int) -> dict:
 
 def status_register_names() -> list:
     return [f"D{STATUS_START_REGISTER + offset}" for offset in range(STATUS_REGISTER_COUNT)]
+
+
+def io_status_register_names() -> list:
+    return [f"D{IO_STATUS_START_REGISTER + offset}" for offset in range(IO_STATUS_REGISTER_COUNT)]
