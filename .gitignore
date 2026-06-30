@@ -11,9 +11,11 @@ venv/
 node_modules/
 dist/
 .vite/
+.npm-cache/
 npm-debug.log*
 
 # Local runtime
 .env
 *.log
 .DS_Store
+.agents/
